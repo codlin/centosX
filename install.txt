@@ -1,0 +1,111 @@
+REF: http://www.frankreimer.de/?p=522
+
+1. Install a base CentOS 7.1 virtual machine
+2. Prepare your build environment
+2.1 Create needed folder structure as root
+    mkdir -p ~/kickstart_build/isolinux/{images,ks,LiveOS,Packages,postinstall}
+2.2 Copy needed content
+check iso mount path
+   df -h
+   dev/sr0             4.1G  4.1G     0 100% /run/media/root/CentOS 7 x86_64
+umount /dev/sr0
+mkdir -p /mnt/iso
+mount -o loop /dev/sr0 /mnt/iso
+cp /mnt/iso/.discinfo ~/kickstart_build/isolinux/
+cp /mnt/iso/isolinux/* ~/kickstart_build/isolinux/
+rsync -av /mnt/iso/images/ ~/kickstart_build/isolinux/images/
+cp /mnt/iso/LiveOS/* ~/kickstart_build/isolinux/LiveOS/
+
+ll /mnt/iso/repodata/ | grep -i comps
+-rw-r--r--. 1 root root 157580 1. Apr 01:43 0e6e90965f55146ba5025ea450f822d1bb0267d0299ef64dd4365825e6bad995-c7-x86_64-comps.xml.gz
+
+cp /mnt/iso/repodata/0e6e90965f55146ba5025ea450f822d1bb0267d0299ef64dd4365825e6bad995-c7-x86_64-comps.xml.gz ~/kickstart_build/
+
+cd ~/kickstart_build/
+gunzip 0e6e90965f55146ba5025ea450f822d1bb0267d0299ef64dd4365825e6bad995-c7-x86_64-comps.xml
+mv 0e6e90965f55146ba5025ea450f822d1bb0267d0299ef64dd4365825e6bad995-c7-x86_64-comps.xml comps.xml
+
+
+2.3 ready packages for postinstall
+mkdir /tmp/packages
+cd /tmp/packages
+yum install git --downloadonly  --downloaddir=/tmp/packages
+
+yum install -y yum-utils device-mapper-persistent-data lvm2 --downloaddir=/tmp/packages
+yum-config-manager \
+    --add-repo \
+    https://download.docker.com/linux/centos/docker-ce.repo
+yum makecache fast
+yum install docker-ce     --downloadonly  --downloaddir=/tmp/packages
+
+yum install make gcc openssl-devel autoconf automake rpm-build redhat-rpm-config python-devel openssl-devel kernel-devel kernel-debug-devel libtool wget --downloadonly  --downloaddir=/tmp/packages
+
+2.4 Copy all your packages and create repodata
+rsync -av /mnt/iso/Packages/ ~/kickstart_build/isolinux/Packages/
+rsync -av /tmp/packages/ ~/kickstart_build/isolinux/Packages/mypkg
+cd ~/kickstart_build/isolinux
+createrepo -g ~/kickstart_build/comps.xml .
+
+3 Prepare Kickstart file
+3.1 Create a kickstart
+You need to create the kickstart file in ~/kickstart_build/isolinux/ks and name it for example ks.cfg. 
+In this case I copied the kickstart file from current virtual machine in path /root. please edit the file if you need.
+
+3.2 Create kickstart postinstallation section
+Add the following at the end of your kickstart file:
+# Copy mypkg to /root/postinstall
+%post
+#!/bin/sh
+
+set -x -v
+exec 1>~/root/kickstart-stage1.log 2>&1
+
+echo "==> copying files from media to install drive..."
+mkdir /mnt/iso
+mount -o loop /dev/cdrom /mnt/iso
+cp -r /mnt/iso/Packages/mypkg /root/
+
+cd /root/mypkg
+echo "==> install all packages..."
+yum -y localinstall *
+echo "==> done."
+
+%end
+
+%post
+#!/bin/sh
+cd ~
+
+set -x -v
+exec 1>~/root/kickstart-stage2.log 2>&1
+
+echo "==> install open vSwitch..."
+
+mkdir -p ~/rpmbuild/SOURCES
+cp /root/mypkg/openvswitch-2.5.1.tar.gz ~/rpmbuild/SOURCES/
+tar xfz openvswitch-2.5.1.tar.gz
+sed 's/openvswitch-kmod, //g' openvswitch-2.5.1/rhel/openvswitch.spec > openvswitch-2.5.1/rhel/openvswitch_no_kmod.spec
+rpmbuild -bb --nocheck ~/openvswitch-2.5.1/rhel/openvswitch_no_kmod.spec
+ls -l ~/rpmbuild/RPMS/x86_64/
+yum localinstall ~/rpmbuild/RPMS/x86_64/openvswitch-2.5.1-1.x86_64.rpm
+systemctl start openvswitch.service
+chkconfig openvswitch on
+
+echo "done."
+%end
+
+copy ks.cfg to ~/kickstart_build/isolinux/ks
+
+3.3 Modify isolinux.cfg
+cd /tmp/iso/isolinux
+vi isolinux.cfg
+
+label linux
+menu label ^Install CentOS Linux 7
+kernel vmlinuz
+append initrd=initrd.img int.ks=cdrom:/dev/cdrom:/ks/ks.cfg
+
+4. Time for action: create your custom CentOS 7 ISO file and test it 
+yum install -y genisoimage
+cd ~/kickstart_build/
+mkisofs -o centos-7-docker.iso -b isolinux.bin -c boot.cat -no-emul-boot -V 'CentOS 7 x86_64' -boot-load-size 4 -boot-info-table -R -J -v -T isolinux/

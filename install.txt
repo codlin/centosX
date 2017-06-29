@@ -102,8 +102,11 @@ vi isolinux.cfg
 
 label linux
 menu label ^Install CentOS Linux 7
+menu default
 kernel vmlinuz
-append initrd=initrd.img int.ks=cdrom:/dev/cdrom:/ks/ks.cfg
+append initrd=initrd.img int.ks=cdrom:/ks/ks.cfg
+
+/run/install/repo
 
 4. Time for action: create your custom CentOS 7 ISO file and test it 
 yum install -y genisoimage

@@ -1,10 +1,18 @@
 REF: http://www.frankreimer.de/?p=522
 
-1. Install a base CentOS 7.1 virtual machine
+Host: 192.168.100.1
+DHCP server: 192.168.100.1
+Http server: 192.168.1.2
+TFTP server: 192.168.1.2
+Virtual Machine:192.168.100.3
+CentOS image: CentOS-7-x86_64-DVD-1611.iso
+
+1. Install a base CentOS 7.1 virtual machine using CentOS image.
 2. Prepare your build environment
+login VM and switch to root user:
 2.1 Create needed folder structure as root
     mkdir -p ~/kickstart_build/isolinux/{images,ks,LiveOS,Packages,postinstall}
-2.2 Copy needed content
+2.2 Copy needed content from iso image
 check iso mount path
    df -h
    dev/sr0             4.1G  4.1G     0 100% /run/media/root/CentOS 7 x86_64
@@ -12,6 +20,7 @@ umount /dev/sr0
 mkdir -p /mnt/iso
 mount -o loop /dev/sr0 /mnt/iso
 cp /mnt/iso/.discinfo ~/kickstart_build/isolinux/
+cp /mnt/iso/.treeinfo ~/kickstart_build/isolinux/
 cp /mnt/iso/isolinux/* ~/kickstart_build/isolinux/
 rsync -av /mnt/iso/images/ ~/kickstart_build/isolinux/images/
 cp /mnt/iso/LiveOS/* ~/kickstart_build/isolinux/LiveOS/
@@ -25,8 +34,7 @@ cd ~/kickstart_build/
 gunzip 0e6e90965f55146ba5025ea450f822d1bb0267d0299ef64dd4365825e6bad995-c7-x86_64-comps.xml
 mv 0e6e90965f55146ba5025ea450f822d1bb0267d0299ef64dd4365825e6bad995-c7-x86_64-comps.xml comps.xml
 
-
-2.3 ready packages for postinstall
+2.3 collect packages for postinstalling
 mkdir /tmp/packages
 cd /tmp/packages
 yum install git --downloadonly  --downloaddir=/tmp/packages
@@ -36,7 +44,6 @@ yum-config-manager \
     https://download.docker.com/linux/centos/docker-ce.repo
 yum makecache fast
 yum install docker-ce     --downloadonly  --downloaddir=/tmp/packages
-
 yum install make gcc openssl-devel autoconf automake rpm-build redhat-rpm-config python-devel openssl-devel kernel-devel kernel-debug-devel libtool wget --downloadonly  --downloaddir=/tmp/packages
 
 2.4 Copy all your packages and create repodata
@@ -50,64 +57,153 @@ createrepo -g ~/kickstart_build/comps.xml .
 You need to create the kickstart file in ~/kickstart_build/isolinux/ks and name it for example ks.cfg. 
 In this case I copied the kickstart file from current virtual machine in path /root. please edit the file if you need.
 
-3.2 Create kickstart postinstallation section
-Add the following at the end of your kickstart file:
-# Copy mypkg to /root/postinstall
-%post
-#!/bin/sh
-
-set -x -v
-exec 1>~/root/kickstart-stage1.log 2>&1
-
-echo "==> copying files from media to install drive..."
-mkdir /mnt/iso
-mount -o loop /dev/cdrom /mnt/iso
-cp -r /mnt/iso/Packages/mypkg /root/
-
-cd /root/mypkg
-echo "==> install all packages..."
-yum -y localinstall *
-echo "==> done."
-
-%end
-
-%post
-#!/bin/sh
-cd ~
-
-set -x -v
-exec 1>~/root/kickstart-stage2.log 2>&1
-
-echo "==> install open vSwitch..."
-
-mkdir -p ~/rpmbuild/SOURCES
-cp /root/mypkg/openvswitch-2.5.1.tar.gz ~/rpmbuild/SOURCES/
-tar xfz openvswitch-2.5.1.tar.gz
-sed 's/openvswitch-kmod, //g' openvswitch-2.5.1/rhel/openvswitch.spec > openvswitch-2.5.1/rhel/openvswitch_no_kmod.spec
-rpmbuild -bb --nocheck ~/openvswitch-2.5.1/rhel/openvswitch_no_kmod.spec
-ls -l ~/rpmbuild/RPMS/x86_64/
-yum localinstall ~/rpmbuild/RPMS/x86_64/openvswitch-2.5.1-1.x86_64.rpm
-systemctl start openvswitch.service
-chkconfig openvswitch on
-
-echo "done."
-%end
-
-copy ks.cfg to ~/kickstart_build/isolinux/ks
-
-3.3 Modify isolinux.cfg
-cd /tmp/iso/isolinux
-vi isolinux.cfg
-
-label linux
-menu label ^Install CentOS Linux 7
-menu default
-kernel vmlinuz
-append initrd=initrd.img int.ks=cdrom:/ks/ks.cfg
-
-/run/install/repo
+3.2 Create postinstall sections
+See %post sections in ks.cfg and ks.net.cfg
+ks.cfg for cdrom installation
+ks.net.cfg for http installation
 
 4. Time for action: create your custom CentOS 7 ISO file and test it 
 yum install -y genisoimage
 cd ~/kickstart_build/
 mkisofs -o centos-7-docker.iso -b isolinux.bin -c boot.cat -no-emul-boot -V 'CentOS 7 x86_64' -boot-load-size 4 -boot-info-table -R -J -v -T isolinux/
+
+On host machine, copy centos-7-docker.iso from virtual machine:
+scp root@192.168.100.3:/root/kickstart_build/centos-7-docker.iso /root/centos-7-docker.iso
+
+5. Install centos via PXE
+REF: http://hmli.ustc.edu.cn/doc/linux/centos-autoinstall.htm
+
+5.1 Install DHCP server
+Login 192.168.100.1:
+command:
+yum -y install dhcp nfs-utils
+
+Configure DHCP server
+edit file /etc/sysconfig/dhcpd:
+#option definitions common to all supported networks...
+#option domain-name "mydomain.org";
+#option domain-name-servers ns1.ustc.edu.cn;
+
+default-lease-time 600;
+max-lease-time 7200;
+
+subnet 192.168.100.0 netmask 255.255.255.0 {
+	option routers              192.168.100.254;  #default gateway
+	option subnet-mask          255.255.255.0;
+	#option nis-domain          "mydomain.org";
+	#option domain-name         "mydomain.org";
+	#option domain-name-servers 202.38.64.7;
+
+	option time-offset          -18000; # Eastern Standard Time
+	range dynamic-bootp         192.168.100.100 192.168.100.200;  #dynamic ip range
+	default-lease-time 21600;
+	max-lease-time 43200;
+
+	host node148 {
+		hardware ethernet a0:42:3f:33:49:5f;
+		fixed-address 192.168.100.148;
+	}
+}
+
+option space PXE;
+option PXE.mtftp-ip    code 1 = ip-address;
+option PXE.mtftp-cport code 2 = unsigned integer 16;
+option PXE.mtftp-sport code 3 = unsigned integer 16;
+option PXE.mtftp-tmout code 4 = unsigned integer 8;
+option PXE.mtftp-delay code 5 = unsigned integer 8;
+option architecture-type code 93 = unsigned integer 16; # RFC4578
+
+class "pxeclients" {
+	match if substring(option vendor-class-identifier, 0, 9) = "PXEClient";
+	next-server 192.168.100.2; #tftp server
+	if option architecture-type = 00:07 {
+		filename "shim.efi"; #x86_64 UEFI bootloader
+	} else if option architecture-type = 00:06 {
+		filename "bootia32.efi"; #ia32 UEFI
+	} else {
+		filename "pxelinux.0"; #LEGACY bootloader
+	}
+}
+
+restart DHCP service:
+service dhcpd restart
+
+On machine (192.168.100.2), switch to root user:
+5.2 Preparing HTTP server
+1. Install http server
+Suppose /data/webserver is the root directory of HTTP server.
+mkdir /data/webserver
+
+start a http server using docker, you can do it in other ways.
+docker run --name webserver --restart always  -p 80:80 -v /data/webserver:/usr/share/nginx/html:ro -d nginx
+
+mkdir /data/webservercfg
+upload nginxcfg to /data/webservercfg
+docker cp /data/webservercfg/nginxcfg/nginx.conf webserver:/etc/nginx/nginx.conf
+
+2. Prepare centos images for HTTP server
+mkdir /data/webserver/centos/7/iso
+mount /root/centos-7-docker.iso /data/webserver/centos/7/iso
+
+restart webserver:
+docker restart webserver
+
+Verify:
+http://192.168.100.2/centos/7/iso
+it should be display centos image files.
+
+5.3 Install TFTP server
+command:
+yum -y install tftp-server nfs-utils
+
+1. edit file /etc/xinetd.d/tftp:
+service tftp
+{
+	disable = no #default value is yes, needs to be changed to no
+	socket_type = dgram
+	protocol = udp
+	wait = yes
+	user = root
+	server = /usr/sbin/in.tftpd
+	server_args = -s /tftpboot #-s using /tftpboot as root directory
+	per_source = 11
+	cps = 100 2
+	flags = IPv4
+}
+
+2. Prepare the PXE boot files
+the files in /tftpboot need to be access be http, so we need to create a system link to direct it.
+rm -rf /tftpboot
+mkdir /data/webserver/centos/7/tftpboot
+ln -s /data/webserver/centos/7/tftpboot /tftpboot
+
+mount -o loop CentOS-7-x86_64-DVD-1611.iso /centos
+cp  /centos/isolinux/{boot.cat, boot.msg, grub.conf, isolinux.bin, splash.png, TRANS, TBL, vesamenu.c32} /tftpboot 
+cp /centos/images/pxeboot/{vmlinuz, initrd.img} /tftpboot
+rpm2cpio /centos/Packages/shim-0.9-2.el7.x86_64.rpm | cpio -dimv
+rpm2cpio /centos/Packages/grub2-efi-2.02-0.44.el7.centos.x86_64.rpm | cpio -dimv
+cp boot/efi/EFI/centos/{shim.efi,grubx64.efi} /tftpboot
+
+cp  /centos/isolinux/pxelinux.0 /tftpboot/
+if pxelinux.0 non-exist, you should copy it from virtual machine:
+yum install syslinux
+
+on host machine:
+scp root@192.168.100.3:/usr/share/syslinux/pxelinux.0 /tftpboot/
+
+cp  ~/kickstart_build/isolinux/ks/ks.net.cfg  /tftpboot/ks/ks.cfg
+mkdir /tftpboot/pxelinux.cfg && cp ~/kickstart_build/isolinux/isolinux.cfg /tftpboot/pxelinux.cfg/default
+Edit file /tftpboot/pxelinux.cfg/default
+label linux
+  menu label ^Install CentOS Linux 7
+  kernel vmlinuz
+  menu default    # move 'menu default' from the other line to here
+  #append initrd=initrd.img ks=cdrom:/ks/ks.cfg quiet
+  append initrd=initrd.img ks=http://192.168.100.2/centos/ks/ks.cfg quiet
+  #append initrd=initrd.img inst.stage2=hd:LABEL=CentOS\x207\x20x86_64 quiet
+
+restart server:
+service xinetd restart
+
+5.4 Start installation
+Set computer as network boot in BIOS.

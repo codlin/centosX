@@ -35,20 +35,20 @@ gunzip 0e6e90965f55146ba5025ea450f822d1bb0267d0299ef64dd4365825e6bad995-c7-x86_6
 mv 0e6e90965f55146ba5025ea450f822d1bb0267d0299ef64dd4365825e6bad995-c7-x86_64-comps.xml comps.xml
 
 2.3 collect packages for postinstalling
-mkdir /tmp/packages
-cd /tmp/packages
-yum install git --downloadonly  --downloaddir=/tmp/packages
-yum install -y yum-utils device-mapper-persistent-data lvm2 --downloaddir=/tmp/packages
+mkdir /root/packages
+cd /root/packages
+yum install git --downloadonly  --downloaddir=/root/packages
+yum install -y yum-utils device-mapper-persistent-data lvm2 --downloaddir=/root/packages
 yum-config-manager \
     --add-repo \
     https://download.docker.com/linux/centos/docker-ce.repo
 yum makecache fast
-yum install docker-ce     --downloadonly  --downloaddir=/tmp/packages
-yum install make gcc openssl-devel autoconf automake rpm-build redhat-rpm-config python-devel openssl-devel kernel-devel kernel-debug-devel libtool wget --downloadonly  --downloaddir=/tmp/packages
+yum install docker-ce     --downloadonly  --downloaddir=/root/packages
+yum install make gcc openssl-devel autoconf automake rpm-build redhat-rpm-config python-devel openssl-devel kernel-devel kernel-debug-devel libtool wget --downloadonly  --downloaddir=/root/packages
 
 2.4 Copy all your packages and create repodata
 rsync -av /mnt/iso/Packages/ ~/kickstart_build/isolinux/Packages/
-rsync -av /tmp/packages/ ~/kickstart_build/isolinux/postinstall/Packages/
+rsync -av /root/packages/ ~/kickstart_build/isolinux/postinstall/Packages/
 cd ~/kickstart_build/isolinux
 createrepo -g ~/kickstart_build/comps.xml .
 
